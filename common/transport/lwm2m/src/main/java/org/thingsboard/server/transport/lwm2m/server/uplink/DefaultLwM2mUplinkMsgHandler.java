@@ -367,26 +367,45 @@ public class DefaultLwM2mUplinkMsgHandler extends LwM2MExecutorAwareService impl
      */
     @Override
     public void onUpdateValueWithSendRequest(Registration registration, SendRequest sendRequest) {
+        Map<LwM2mPath,Collection<LwM2mResourceInstance>> multipleInstanceResource = new HashMap<LwM2mPath,Collection<LwM2mResourceInstance>>();
+        LwM2mClient lwM2MClient = clientContext.getClientByEndpoint(registration.getEndpoint());
+
         for(var entry : sendRequest.getNodes().entrySet()) {
             LwM2mPath path = entry.getKey();
             LwM2mNode node = entry.getValue();
-            LwM2mClient lwM2MClient = clientContext.getClientByEndpoint(registration.getEndpoint());
             String stringPath = convertObjectIdToVersionedId(path.toString(), registration);
             ObjectModel objectModelVersion = lwM2MClient.getObjectModel(stringPath, modelProvider);
             if (objectModelVersion != null) {
                 if (node instanceof LwM2mObject) {
                     LwM2mObject lwM2mObject = (LwM2mObject) node;
+                    log.trace("onUpdateValueWithSendRequest LwM2mObject:[{}]",lwM2mObject);
                     this.updateObjectResourceValue(lwM2MClient, lwM2mObject, stringPath, 0);
                 } else if (node instanceof LwM2mObjectInstance) {
                     LwM2mObjectInstance lwM2mObjectInstance = (LwM2mObjectInstance) node;
+                    log.trace("onUpdateValueWithSendRequest LwM2mObjectInstance:[{}]",lwM2mObjectInstance);
                     this.updateObjectInstanceResourceValue(lwM2MClient, lwM2mObjectInstance, stringPath, 0);
                 } else if (node instanceof LwM2mResource) {
                     LwM2mResource lwM2mResource = (LwM2mResource) node;
+                    log.trace("onUpdateValueWithSendRequest LwM2mResource:[{}]", lwM2mResource);
                     this.updateResourcesValue(lwM2MClient, lwM2mResource, stringPath, Mode.UPDATE, 0);
+                }else if (node instanceof LwM2mResourceInstance) {
+                    log.trace("onUpdateValueWithSendRequest LwM2mResourceInstance:[{}]",node);
+                    LwM2mResourceInstance resourceInstance = (LwM2mResourceInstance) node;
+                    LwM2mPath b = new LwM2mPath(path.getObjectId(),path.getObjectInstanceId(),path.getResourceId());
+                    multipleInstanceResource.computeIfAbsent(b,k -> new ArrayList<>()).add(resourceInstance);
+                } else {
+                    log.trace("onUpdateValueWithSendRequest LwM2mNode:[{}]",node);
                 }
             }
             tryAwake(lwM2MClient);
         }
+
+        multipleInstanceResource.forEach( (k,v) -> {
+            String p = convertObjectIdToVersionedId(k.toString(), registration);
+            LwM2mResourceInstance ins = v.stream().findFirst().get();
+            LwM2mMultipleResource lwM2mMultipleResource = new LwM2mMultipleResource(ins.getId(),ins.getType(),v);
+            this.updateResourcesValue(lwM2MClient, lwM2mMultipleResource, p, Mode.UPDATE, 0);
+        });
     }
 
     /**
@@ -782,7 +801,7 @@ public class DefaultLwM2mUplinkMsgHandler extends LwM2MExecutorAwareService impl
 
     @Override
     public void onWriteCompositeResponseOk(LwM2mClient client, WriteCompositeRequest request, int code) {
-        log.trace("ReadCompositeResponse: [{}]", request.getNodes());
+        log.trace("onWriteCompositeResponseOk: [{}]", request.getNodes());
         request.getNodes().forEach((k, v) -> {
             if (v instanceof LwM2mSingleResource) {
                 this.updateResourcesValue(client, (LwM2mResource) v, k.toString(), Mode.REPLACE, code);
